@@ -897,7 +897,6 @@
 
           addPopover();
 
-
           switch (input) {
             default:
             case 0:
@@ -910,26 +909,27 @@
               newPathName = 'projects';
               break;
             case 3:
-              newPathName = 'chat';
-              break;
-            case 4:
               newPathName = 'participants';
               break;
           }
+
           let newUrl = `/hackathon/${vm.hackathonObj['slug']}/${newPathName}/${window.location.search}`;
 
           history.pushState({}, `${vm.hackathonObj['slug']} - ${newPathName}`, newUrl);
 
         }
       },
-      data: () => ({
-        is_registered: document.is_registered,
-        activePanel: document.activePanel,
-        hackathonObj: document.hackathonObj,
-        hackathonSponsors: document.hackathonSponsors,
-        hackathonProjects: [],
-        chatURL: document.chatURL
-      })
+      data: function() {
+        return {
+          chatMode: false,
+          is_registered: document.is_registered,
+          activePanel: document.activePanel,
+          hackathonObj: document.hackathonObj,
+          hackathonSponsors: document.hackathonSponsors,
+          hackathonProjects: [],
+          chatURL: document.chatURL
+        };
+      }
     });
   });
 

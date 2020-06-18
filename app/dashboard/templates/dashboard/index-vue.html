@@ -27,6 +27,7 @@
       {% include 'shared/cards.html' %}
     {% endif %}
     <link rel="stylesheet" href='{% static "v2/css/dashboard-hackathon.css" %}'/>
+    <link rel="stylesheet" href='{% static "v2/css/bootstrap-vue.min.css" %}'/>
     <link rel="stylesheet" href='{% static "v2/css/featured-bounties.css" %}'/>
     <link rel="stylesheet" href='{% static "v2/css/tag.css" %}'/>
     <link rel="stylesheet" href='{% static "v2/css/users.css" %}' />
@@ -95,7 +96,7 @@
             </div>
           </div>
           <div class="col-12 col-xl-9 body hackathon-explorer">
-            <b-tabs :value="activePanel" @input="tabChange" justified nav-class="col-12 col-md-8 offset-md-3 px-4" nav-wrapper-class="col-12 nav-tabs" align="left" content-class="col-12 px-4 mt-4 light-blue" class="row">
+            <b-tabs :value="activePanel" @input="tabChange" justified nav-class="col-12 col-md-8 offset-md-3 px-4" nav-wrapper-class="col-12 nav-tabs" align="left" :content-class="`col-12 ${chatMode ? 'px-3' : 'px-4 mt-4'} light-blue`" class="row">
               <template v-slot:tabs-start>
                 <div class="hack-logo-wrapper d-none d-xl-block">
                   <div class="mb-1 hackathon-logo">
@@ -312,21 +313,7 @@
                       </div>
                     </div>
                   </project-directory>
-              </b-tab>
-              <b-tab :disabled="!is_registered"  class="col-12" title-item-class="navigation">
-                <template v-slot:title>
-                  <div class="mt-4">
-                    {% trans "Chat" %}
-                  </div>
-                </template>
-                <template>
-                  <div class="ml-4">
-                    <div class="chatWrapper col-12">
-                      {% include 'shared/embed_chat_iframe.html' with chat_url_embed=chat_url_embed %}
-                    </div>
-                  </div>
-                </template>
-              </b-tab>
+                </b-tab>
               <b-tab class="col-12" :disabled="!is_registered" title-item-class="navigation"lazy>
                   <template v-slot:title>
                     <div class="mt-4">
@@ -511,7 +498,7 @@
                                       <a :href="`https://www.linkedin.com/in/${ user.linkedin_url }`" v-if="user.linkedin_url">
                                         <i class="fab fa-linkedin-in"></i>
                                       </a>
-                                      <a @click="messageUser(user.handle);" href="#" v-if="user.chat_id">
+                                      <a @click="chatWindow('@' + user.handle);" href="javascript:" v-if="user.chat_id">
                                         <i class="fas fa-comment-dots"></i>
                                       </a>
                                     </div>
@@ -717,7 +704,9 @@
       document.hackathonSponsors = JSON.parse(document.getElementById('sponsor-list').textContent);
       document.hackathonObj = JSON.parse(document.getElementById('hackathon-object').textContent);
       document.activePanel = parseInt({{panel | safe}});
-      document.chatURL = "{{ chat_url | safe}}";
+      {% if is_registered %}
+      document.chat_url_override = "{{ chat_override_url | safe}}";
+      {% endif %}
       if(location.hostname === 'gitcoin.co') $('#network-filter').hide();
     </script>
     <script src='{% static "v2/js/pages/dashboard-hackathon.js" %}'></script>

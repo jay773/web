@@ -3661,7 +3661,7 @@ def hackathon(request, hackathon='', panel='prizes'):
     params['keywords'] = programming_languages + programming_languages_full
     params['active'] = 'users'
     from chat.tasks import get_chat_url
-    params['chat_url_embed'] = f"/hackathons/channels/{hackathon_event.chat_channel_id}"
+    params['chat_override_url'] = f"{get_chat_url()}/hackathons/channels/{hackathon_event.chat_channel_id}"
 
     params['is_sponsor'] = request.user.is_authenticated and any(
         [request.user.profile.handle.lower() == bounty.bounty_owner_github_username.lower() for bounty in Bounty.objects.filter(event=hackathon)]
@@ -5354,22 +5354,28 @@ def validate_number(user, twilio, phone, redis, delivery_method='sms'):
 
     redis.set(f'verification:{user.id}:pv', pv.pk)
 
+    validate_consumer_number = False
+    validate_carrier = False
+
     if validation.caller_name and validation.caller_name["caller_type"] == 'BUSINESS':
         pv.validation_passed = False
         pv.validation_comment = 'Only support consumer numbers, not business or cloud numbers.'
         pv.save()
-        return JsonResponse({
-            'success': False,
-            'msg': pv.validation_comment
-        }, status=401)
+        if validate_consumer_number:
+            return JsonResponse({
+                'success': False,
+                'msg': pv.validation_comment
+            }, status=401)
+
     if validation.carrier and validation.carrier['type'] != 'mobile':
         pv.validation_passed = False
         pv.validation_comment = 'Phone type isn\'t supported'
         pv.save()
-        return JsonResponse({
-            'success': False,
-            'msg': pv.validation_comment
-        }, status=401)
+        if validate_carrier:
+            return JsonResponse({
+                'success': False,
+                'msg': pv.validation_comment
+            }, status=401)
 
     if delivery_method == 'email':
         twilio.verify.verifications.create(to=user.profile.email, channel='email')
