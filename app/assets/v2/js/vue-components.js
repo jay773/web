@@ -16,7 +16,7 @@ Vue.mixin({
 
 Vue.component('hackathon-sponsor-dashboard', {
   props: [],
-  data: function () {
+  data: function() {
     return {
       isFunder: false,
       funderBounties: []
@@ -177,8 +177,8 @@ Vue.component('tribes-settings', {
           modules: {
             toolbar: [
               [ 'bold', 'italic', 'underline' ],
-              [{ 'align': [] }],
-              [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+              [{'align': []}],
+              [{'list': 'ordered'}, {'list': 'bullet'}],
               [ 'link', 'code-block' ],
               ['clean']
             ]
@@ -190,7 +190,7 @@ Vue.component('tribes-settings', {
           modules: {
             toolbar: [
               [ 'bold', 'italic', 'underline' ],
-              [{ 'align': [] }],
+              [{'align': []}],
               [ 'link', 'code-block' ],
               ['clean']
             ]
@@ -205,49 +205,51 @@ Vue.component('tribes-settings', {
 });
 
 Vue.component('manage-sponsor', {
+  props: ['hackathon_id'],
   methods: {
     onMentorChange: function(event) {
-      let bounty_id = event.target.id.split('-')[1];
 
-      this.bountyMentors[bounty_id] = $.map(event.target.selectedOptions, (n, idx) => {
-        return [n.value];
+      this.bountyMentors = $('.mentor-users').select2('data').map(element => {
+        return element.id;
       });
+      console.log(event);
+      console.log(this.bountyMentors);
     },
     updateBountyMentors: function() {
       let vm = this;
       const url = '/api/v0.1/bounty_mentor/';
 
-      const updateBountyMentor = fetchData (url, 'POST', {
+      const updateBountyMentor = fetchData(url, 'POST', JSON.stringify({
         has_overrides: false,
+        hackathon_id: vm.hackathon_id,
         set_default_mentors: true,
         new_default_mentors: vm.bountyMentors
-      }, {'X-CSRFToken': vm.csrf, 'Content-Type': 'application/json; charset=utf-8'});
+      }), {'X-CSRFToken': vm.csrf, 'Content-Type': 'application/json; charset=utf-8'});
 
       $.when(updateBountyMentor).then((response) => {
-        _alert({ message: gettext(response.message) }, 'success');
+        _alert({message: gettext(response.message)}, 'success');
       }).catch((error) => {
-        _alert({ message: gettext(error.message) }, 'error');
+        _alert({message: gettext(error.message)}, 'error');
       });
     }
   },
   mounted() {
-    this.fetchBounties();
-  },
-  updated() {
-    this.$nextTick(() => {
-      userSearch('.mentor-users', false, undefined, false, false, true, this.onMentorChange);
+    userSearch('.mentor-users', false, undefined, false, false, true, {'select': this.onMentorChange, 'unselect': this.onMentorChange});
+    this.bountyMentors = $('.mentor-users').select2('data').map(element => {
+      return element.id;
     });
+
+    console.log(this.bountyMentors);
   },
   data: function() {
     return {
       csrf: $("input[name='csrfmiddlewaretoken']").val() || '',
       isFunder: false,
       funderBounties: [],
-      bountyMentors: {}
+      bountyMentors: []
     };
   }
-})
-
+});
 
 Vue.component('project-directory', {
   delimiters: [ '[[', ']]' ],
@@ -294,8 +296,8 @@ Vue.component('project-directory', {
         vm.userProjects = [];
         if (vm.userId) {
           vm.userProjects = vm.hackathonProjects.filter(
-            ({ profiles }) => profiles.some(
-              ({ id }) => id === parseInt(vm.userId, 10)
+            ({profiles}) => profiles.some(
+              ({id}) => id === parseInt(vm.userId, 10)
             )
           );
         }
@@ -410,7 +412,10 @@ Vue.component('project-card', {
       let vm = this;
 
       const url = '/api/v0.1/hackathon_project/set_winner/';
-      const markWinner = fetchData(url, 'POST', {project_id: project.pk, winner: $event ? 1 : 0}, {'X-CSRFToken': vm.csrf});
+      const markWinner = fetchData(url, 'POST', {
+        project_id: project.pk,
+        winner: $event ? 1 : 0
+      }, {'X-CSRFToken': vm.csrf});
 
       $.when(markWinner).then(response => {
         if (response.message) {
