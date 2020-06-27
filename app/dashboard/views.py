@@ -924,7 +924,7 @@ def set_project_winner(request):
         return JsonResponse({
             'message': 'Invalid Project'
         })
-    project = HackathonProject.objects.get(pk=project_id).prefetch_related('bounty')
+    project = HackathonProject.objects.get(pk=project_id)
 
     if not request.user.is_authenticated and (request.user.is_staff or request.user.profile.handle == project.bounty.bounty_owner_github_username):
         return JsonResponse({
@@ -1079,6 +1079,12 @@ def users_fetch(request):
 
         follower_count = followers.count()
         profile_json['follower_count'] = follower_count
+
+        if hackathon_id:
+            registration = HackathonRegistration.objects.filter(hackathon_id=hackathon_id, registrant=user).last()
+            if registration:
+                profile_json['looking_team_members'] = registration.looking_team_members
+                profile_json['looking_project'] = registration.looking_project
 
         if user.is_org:
             profile_dict = user.__dict__
@@ -2612,7 +2618,8 @@ def get_profile_tab(request, profile, tab, prev_context):
         if profile.is_org:
             activity_tabs = [
                 (_('All Activity'), all_activities),
-                ]
+                (_('Bounties'), ['new_bounty', 'start_work', 'work_submitted', 'work_done']),
+            ]
 
         page = request.GET.get('p', None)
 
@@ -2709,6 +2716,7 @@ def get_profile_tab(request, profile, tab, prev_context):
         for ele in contributions:
             history.append(ele.normalized_data)
         context['history'] = history
+        context['subs'] = profile.grant_contributor.filter(num_tx_approved__gt=1)
     elif tab == 'active':
         context['active_bounties'] = active_bounties
     elif tab == 'resume':
@@ -3665,9 +3673,11 @@ def hackathon(request, hackathon='', panel='prizes'):
         active_tab = 3
     elif panel == "participants":
         active_tab = 4
+    filter = ''
+    if request.GET.get('filter'):
+        filter = f':{request.GET.get("filter")}'
 
-
-    what = f'hackathon:{hackathon_event.id}'
+    what = f'hackathon:{hackathon_event.id}{filter}'
     from townsquare.utils import can_pin
     try:
         pinned = PinnedPost.objects.get(what=what)
@@ -4055,7 +4065,6 @@ def hackathon_save_project(request):
 @require_POST
 def hackathon_registration(request):
     profile = request.user.profile if request.user.is_authenticated and hasattr(request.user, 'profile') else None
-
     hackathon = request.POST.get('name')
     referer = request.POST.get('referer')
     poll = request.POST.get('poll')
@@ -4085,10 +4094,19 @@ def hackathon_registration(request):
             for entry in poll:
                 question = get_object_or_404(Question, id=int(entry['name']))
 
-                if question.question_type == 'SINGLE_CHOICE':
+                if question.question_type == 'SINGLE_OPTION':
                     answer, status = Answer.objects.get_or_create(user=request.user, question=question,
                                                                   hackathon=hackathon_event)
                     answer.checked = entry['value'] == 'on'
+                    answer.save()
+                elif question.question_type == 'SINGLE_CHOICE':
+                    option = get_object_or_404(Option, id=int(entry['value']))
+                    answer = Answer.objects.filter(user=request.user, question=question,
+                                                   hackathon=hackathon_event).first()
+                    if not answer:
+                        answer = Answer(user=request.user, question=question, hackathon=hackathon_event)
+
+                    answer.choice = option
                     answer.save()
                 elif question.question_type == 'MULTIPLE_CHOICE':
                     option = get_object_or_404(Option, id=int(entry['value']))
@@ -4098,14 +4116,13 @@ def hackathon_registration(request):
                     values.append(int(entry['value']))
                     set_questions[entry['name']] = values
                 else:
-                    answer, status = Answer.objects.get_or_create(user=request.user, question=question,
-                                                                  hackathon=hackathon_event)
-                    answer.open_response = entry['value']
+                    answer, status = Answer.objects.get_or_create(user=request.user, open_response=entry['value'],
+                                                                  hackathon=hackathon_event, question=question)
                     answer.save()
 
             for (question, choices) in set_questions.items():
-                    Answer.objects.filter(user=request.user, question__id=int(question),
-                                          hackathon=hackathon_event).exclude(choice__in=choices).delete()
+                Answer.objects.filter(user=request.user, question__id=int(question),
+                                      hackathon=hackathon_event).exclude(choice__in=choices).delete()
 
     except Exception as e:
         logger.error('Error while saving registration', e)

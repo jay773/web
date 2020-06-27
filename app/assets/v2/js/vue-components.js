@@ -262,10 +262,9 @@ Vue.component('project-directory', {
       vm.noResults = false;
 
       if (newPage) {
+        vm.projectsHasNext = null;
         vm.projectsPage = newPage;
       }
-
-      vm.params.page = vm.projectsPage;
 
       if (vm.hackathonId) {
         vm.params.hackathon = hackathonId;
@@ -283,12 +282,11 @@ Vue.component('project-directory', {
 
       const searchParams = new URLSearchParams(vm.params);
 
-      const apiUrlProjects = `/api/v0.1/projects_fetch/?${searchParams.toString()}`;
+      const apiUrlProjects = vm.projectsHasNext ? vm.projectsHasNext : `/api/v0.1/projects_fetch/?${searchParams.toString()}`;
 
       const getProjects = fetchData(apiUrlProjects, 'GET');
 
       $.when(getProjects).then(function(response) {
-        vm.hackathonProjects = [];
         response.results.forEach(function(item) {
           vm.hackathonProjects.push(item);
         });
@@ -301,16 +299,9 @@ Vue.component('project-directory', {
             )
           );
         }
-        vm.projectsNumPages = response.count;
         vm.projectsHasNext = response.next;
 
         vm.numProjects = response.count;
-        if (vm.projectsHasNext) {
-          vm.projectsPage = ++vm.projectsPage;
-
-        } else {
-          vm.projectsPage = 1;
-        }
 
         if (vm.hackathonProjects.length) {
           vm.noResults = false;
@@ -327,6 +318,20 @@ Vue.component('project-directory', {
 
       vm.fetchProjects(1);
 
+    },
+    bottomVisible: function() { // TODO: abstract this to the mixin, and have it take a callback which modifies the component state.
+      let vm = this;
+
+      const scrollY = window.scrollY;
+      const visible = document.documentElement.clientHeight;
+      const pageHeight = document.documentElement.scrollHeight - 500;
+      const bottomOfPage = visible + scrollY >= pageHeight;
+
+      if (!vm.isLoading && (bottomOfPage || pageHeight < visible)) {
+        if (vm.projectsHasNext) {
+          vm.fetchProjects();
+        }
+      }
     }
   },
   data: function() {
@@ -339,8 +344,7 @@ Vue.component('project-directory', {
       userProjects: document.userProjects || [],
       projectsPage: 1,
       hackathonId: document.hackathon_id || null,
-      projectsNumPages: 0,
-      projectsHasNext: false,
+      projectsHasNext: null,
       numProjects: 0,
       media_url,
       searchTerm: null,

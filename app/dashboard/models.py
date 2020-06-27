@@ -1458,16 +1458,16 @@ class SendCryptoAssetQuerySet(models.QuerySet):
         return self.filter(tx_status='success').exclude(txid='')
 
     def not_submitted(self):
-        """Filter results down to successful sends only."""
+        """Filter results down to not submitted results only."""
         return self.filter(tx_status='not_subed')
 
     def send_pending(self):
         """Filter results down to pending sends only."""
-        return self.filter(tx_status='pending').exclude(txid='')
+        return self.filter(Q(tx_status='pending') | Q(txid='pending_celery')).exclude(txid='')
 
     def send_happy_path(self):
         """Filter results down to pending/success sends only."""
-        return self.filter(tx_status__in=['pending', 'success']).exclude(txid='')
+        return self.filter(Q(tx_status__in=['pending', 'success']) | Q(txid='pending_celery')).exclude(txid='')
 
     def send_fail(self):
         """Filter results down to failed sends only."""
@@ -2164,6 +2164,7 @@ class Activity(SuperModel):
         ('consolidated_leaderboard_rank', 'Consolidated Leaderboard Rank'),
         ('consolidated_mini_clr_payout', 'Consolidated CLR Payout'),
         ('hackathon_registration', 'Hackathon Registration'),
+        ('hackathon_new_hacker', 'Hackathon Registration'),
         ('new_hackathon_project', 'New Hackathon Project'),
         ('flagged_grant', 'Flagged Grant'),
     ]
@@ -2583,6 +2584,8 @@ class HackathonRegistration(SuperModel):
         blank=True
     )
     referer = models.URLField(null=True, blank=True, help_text='Url comes from')
+    looking_team_members = models.BooleanField(default=False)
+    looking_project = models.BooleanField(default=False)
     registrant = models.ForeignKey(
         'dashboard.Profile',
         related_name='hackathon_registration',
@@ -2744,15 +2747,39 @@ class Profile(SuperModel):
     validation_attempts = models.PositiveSmallIntegerField(default=0, help_text=_('Number of generated SMS codes to validate account'))
     last_validation_request = models.DateTimeField(blank=True, null=True, help_text=_("When the user requested a code for last time "))
     encoded_number = models.CharField(max_length=255, blank=True, help_text=_('Number with the user validate the account'))
+    sybil_score = models.IntegerField(default=-1)
 
     objects = ProfileManager()
     objects_full = ProfileQuerySet.as_manager()
 
     @property
+    def latest_sybil_investigation(self):
+        try:
+            return self.investigations.filter(key='sybil').first().description
+        except:
+            return ''
+
+
+    @property
     def suggested_bounties(self):
         suggested_bounties = BountyRequest.objects.filter(tribe=self, status='o').order_by('created_on')
 
-        return suggested_bounties if suggested_bounties else []
+    @property
+    def sybil_score_str(self):
+        _map = {
+            -2: 'Error',
+            -1: 'N/A',
+            0: 'Low',
+            1: 'Med-Low',
+            2: 'Med',
+            3: 'Med-High',
+            4: 'High',
+            5: 'Very High',
+        }
+        score = self.sybil_score
+        if score > 5:
+            return f'VeryX{score} High'
+        return _map.get(score, "Unknown") 
 
     @property
     def chat_num_unread_msgs(self):
@@ -2892,6 +2919,11 @@ class Profile(SuperModel):
         if not self.is_org:
             return Token.objects.none()
         return Token.objects.filter(Q(name__icontains=self.name)|Q(name__icontains=self.handle)).filter(cloned_from_id=F('token_id')).visible()
+
+    @property
+    def kudos_authored(self):
+        from kudos.models import Token
+        return Token.objects.filter(artist=self.handle, num_clones_allowed__gt=1, hidden=False)
 
     @property
     def get_my_kudos(self):
@@ -4207,7 +4239,7 @@ class Profile(SuperModel):
     def locations(self):
         from app.utils import get_location_from_ip
         locations = []
-        for login in self.actions.filter(action='Login'):
+        for login in self.actions.filter(action='Login').order_by('-created_on'):
             if login.location_data:
                 locations.append(login.location_data)
             else:
@@ -5026,17 +5058,39 @@ class Poll(SuperModel):
     hackathon = models.ManyToManyField(HackathonEvent)
 
 
+class PollMedia(SuperModel):
+    name = models.CharField(max_length=350)
+    image = models.ImageField(
+        upload_to=get_upload_filename,
+        null=True,
+        blank=True,
+        help_text=_('Poll media asset')
+    )
+
+    def __str__(self):
+        return f'{self.id} - {self.name}'
+
 
 class Question(SuperModel):
     TYPE_QUESTIONS = (
+        ('SINGLE_OPTION', 'Single option'),
         ('SINGLE_CHOICE', 'Single Choice'),
         ('MULTIPLE_CHOICE', 'Multiple Choices'),
         ('OPEN', 'Open'),
     )
+
+    TYPE_HOOKS = (
+        ('NO_ACTION', 'No trigger any action'),
+        ('TOWNSQUARE_INTRO', 'Create intro on Townsquare'),
+        ('LOOKING_TEAM_PROJECT', 'Looking for team or project')
+    )
+
+    hook = models.CharField(default='NO_ACTION', choices=TYPE_HOOKS, max_length=50)
     poll = models.ForeignKey(Poll, on_delete=models.CASCADE, null=True, blank=True)
     question_type = models.CharField(choices=TYPE_QUESTIONS, max_length=50, blank=False, null=False)
     text = models.CharField(max_length=350, blank=True, null=True)
     order = models.PositiveIntegerField(default=0, blank=False, null=False)
+    header = models.ForeignKey(PollMedia, null=True, on_delete=models.SET_NULL)
 
     class Meta(object):
         ordering = ['order']
@@ -5062,6 +5116,49 @@ class Answer(SuperModel):
     hackathon = models.ForeignKey(HackathonEvent, null=True, on_delete=models.CASCADE)
 
 
+@receiver(post_save, sender=Answer, dispatch_uid='hooks_on_question_response')
+def psave_answer(sender, instance, created, **kwargs):
+    if created:
+        if instance.question.hook == 'TOWNSQUARE_INTRO':
+            registration = HackathonRegistration.objects.filter(hackathon=instance.hackathon,
+                                                                registrant=instance.user.profile).first()
+
+            Activity.objects.create(
+                profile=instance.user.profile,
+                hackathonevent=instance.hackathon,
+                activity_type='hackathon_new_hacker',
+                metadata={
+                    'answer': instance.id,
+                    'intro_text': f'{instance.open_response or ""} #intro',
+                    'looking_members': registration.looking_team_members if registration else False,
+                    'looking_project': registration.looking_project if registration else False,
+                    'hackathon_registration': registration.id if registration else 0
+                }
+            )
+        elif instance.question.hook == 'LOOKING_TEAM_PROJECT':
+            registration = HackathonRegistration.objects.filter(hackathon=instance.hackathon,
+                                                                registrant=instance.user.profile).first()
+            print(instance)
+            if registration:
+                if instance.choice.text.lower().find('team') != -1:
+                    registration.looking_team_members = True
+
+                if instance.choice.text.lower().find('project') != -1:
+                    registration.looking_project = True
+
+                registration.save()
+
+                activity = Activity.objects.filter(
+                    profile=instance.user.profile,
+                    hackathonevent=instance.hackathon,
+                    activity_type='hackathon_new_hacker').last()
+
+                if activity:
+                    activity.metadata['looking_team_members'] = registration.looking_team_members
+                    activity.metadata['looking_project'] = registration.looking_project
+                    activity.save()
+
+
 class Investigation(SuperModel):
     profile = models.ForeignKey(
         'dashboard.Profile', on_delete=models.CASCADE, related_name='investigations', blank=True
@@ -5080,26 +5177,55 @@ class Investigation(SuperModel):
         from django.contrib.humanize.templatetags.humanize import naturaltime
         ipAddresses = (userActions.values('ip_address').annotate(Count("id")).order_by('-id__count'))
         cities = (userActions.values('location_data__city').annotate(Count("id")).order_by('-id__count'))
+        total_sybil_score = 0
+        if instance.squelches.filter(active=True).exists():
+            htmls.append('USER HAS ACTIVE SQUELCHES')
+            total_sybil_score += 3
+            htmls.append('(DINGx3)')
 
         htmls += [f"<a href=/_administrationdashboard/useraction/?profile={instance.pk}>View Recent User Actions</a><BR>"]
 
         htmls += [ f"Github Created: {instance.github_created_on.strftime('%Y-%m-%d')} ({naturaltime(instance.github_created_on)})<BR>"]
+
+        if instance.github_created_on > (timezone.now() - timezone.timedelta(days=7)):
+            htmls.append('New Github (DING)')
+            total_sybil_score += 1
+        if instance.github_created_on > (timezone.now() - timezone.timedelta(days=1)):
+            total_sybil_score += 1
+            htmls.append('VERY New Github (DING)')
+        if instance.created_on > (timezone.now() - timezone.timedelta(days=1)):
+            total_sybil_score += 1
+            htmls.append('New Profile (DING)')
+
         print(f" - preferred payout {time.time()}")
         if instance.preferred_payout_address:
             htmls.append('Preferred Payout Address')
             htmls.append(f' - {instance.preferred_payout_address}')
             other_Profiles = Profile.objects.filter(preferred_payout_address=instance.preferred_payout_address).exclude(pk=instance.pk).values_list('handle', flat=True)
+            if other_Profiles.count() > 0:
+                total_sybil_score += 1
+                htmls.append('Other Profiles with this addr (DING)')
+            if other_Profiles.count() > 3:
+                total_sybil_score += 1
+                htmls.append('Many other Profiles with this addr (DING)')
             url = f'/_administrationdashboard/profile/?preferred_payout_address={instance.preferred_payout_address}'
             htmls += [f" -- <a href={url}>{len(other_Profiles)} other profiles share this ppa: {', '.join(list(other_Profiles))}</a><BR>"]
 
         print(f" - ip ({len(ipAddresses)}) {time.time()}")
         htmls.append('IP Addresses')
         htmls.append("<div style='max-height: 300px; overflow-y: scroll'>")
+        ip_flagged = False
         for ip in ipAddresses:
             html = f"- <a href=/_administrationdashboard/useraction/?ip_address={ip['ip_address']}>{ip['ip_address']} ({ip['id__count']} Visits)</a>"
             other_Profiles = UserAction.objects.filter(ip_address=ip['ip_address'], profile__isnull=False).exclude(profile=instance).distinct('profile').values_list('profile__handle', flat=True)
             if len(other_Profiles):
                 html += f"<BR> -- {len(other_Profiles)} other profiles share this IP: {', '.join(list(other_Profiles))}"
+            if other_Profiles.count() > 0:
+                if not ip_flagged:
+                    ip_flagged = True
+                    total_sybil_score += 1
+                    htmls.append('Other Profiles with this IP Addr (DING)')
+
             htmls.append(html)
         htmls.append("</div>'")
 
@@ -5118,6 +5244,7 @@ class Investigation(SuperModel):
         for earning in earnings:
             html = f"- <a href={earning.admin_url}>{earning}</a>"
             htmls.append(html)
+            #TODO: if shared with a known sybil, then total_sybil_score += 1
         htmls.append("</div>'")
 
         sent_earnings = instance.sent_earnings.filter(network='mainnet').all()
@@ -5129,6 +5256,8 @@ class Investigation(SuperModel):
             htmls.append(html)
         htmls.append("</div>'")
 
+        htmls += [f"SYBIL_SCORE: {total_sybil_score} "]
+
         print(f" - End {time.time()}")
         htmls = ("<BR>".join(htmls))
         instance.investigations.filter(key='sybil').delete()
@@ -5137,6 +5266,8 @@ class Investigation(SuperModel):
             description=htmls,
             key='sybil',
         )
+
+        instance.sybil_score = total_sybil_score
 
 
 class ObjectView(SuperModel):

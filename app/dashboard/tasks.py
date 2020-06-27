@@ -124,6 +124,11 @@ def grant_update_email_task(self, pk, retry: bool = True) -> None:
     activity = Activity.objects.get(pk=pk)
     grant_update_email(activity)
 
+    from django.utils import timezone
+    grant = activity.grant
+    grant.last_update = timezone.now()
+    grant.save()
+
 
 @app.shared_task(bind=True)
 def m2m_changed_interested(self, bounty_pk, retry: bool = True) -> None:
@@ -150,6 +155,7 @@ def increment_view_count(self, pks, content_type, user_id, view_type, retry: boo
     :param view_type:
     :return:
     """
+    individual_storage = False # TODO: Change back to true IFF we figure out how to manage storage of this table
     user = None
     if user_id:
         user = User.objects.get(pk=user_id)
@@ -158,7 +164,7 @@ def increment_view_count(self, pks, content_type, user_id, view_type, retry: boo
         key = f"{content_type}_{pk}"
         print(key)
         result = redis.incr(key)
-        if pk and view_type == 'individual':
+        if pk and view_type == 'individual' and individual_storage:
             try:
                 ObjectView.objects.create(
                     viewer=user,
